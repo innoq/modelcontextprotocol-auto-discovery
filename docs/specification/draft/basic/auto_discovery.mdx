@@ -8,6 +8,8 @@ title: Auto Discovery
 
 ## Introduction
 
+The key words “MUST”, “SHOULD”, and “MAY” are to be interpreted as described in RFC 2119.
+
 ### Purpose and Scope
 
 Currently, an MCP client requires all MCP servers to be registered manually.
@@ -18,6 +20,10 @@ discover tools/prompts across heterogeneous environments.
 This document introduces a mechanism for **Auto-Discovery**,
 allowing clients to automatically discover MCP servers and their
 tools/prompts based on a given domain.
+
+This concept does not change the major behavior of the Model Context Protocol,
+which is described in the llms.txt - Revision 2024-06-18.
+The auto discovery starts and ends bevor the MCP workflows are starting.
 
 ---
 
@@ -44,13 +50,17 @@ usability by enabling MCP clients to:
 
 To make auto-discovery possible, two things are needed:
 
-1. A URI Schema where a mcp client can use to detect mcp servers and mcp features to use.
-2. A secure mechanism to retrieve the real endpoint of a mcp servers without the need of a global registry.
+1. A URI Schema where the MCP client can use to detect MCP servers and MCP features to use.
+2. A secure mechanism to retrieve the real endpoint of MCP servers without the need of a global registry.
+
+ The Auto-Discovery procedure is performed **before** any regular MCP request/response cycle.
+ Once a server URL has been resolved, the client **MUST** continue to use the standard HTTP endpoints defined in the current MCP reference (e.g. `/v1/models`, `/v1/tools`).
+ The proposal therefore introduces no breaking change and is fully backward-compatible.
+
 
 ### Auto-Discovery URI Scheme
 
-
-A new URI schema `mcp://` is introduced:
+A new URI scheme `mcp://` is introduced:
 
 ```
 mcp://<domain>/<server_name>/<mcp_feature>/<mcp_feature_name>
@@ -59,7 +69,11 @@ mcp://<domain>/<server_name>/<mcp_feature>/<mcp_feature_name>
 - `<domain>`: The domain to query for MCP server discovery.
 - `<server_name>`: The logical name of the MCP server within the domain.
 - `<mcp_feature>`: The feature to use, e.g. prompts/tools/resources.
-- `<mcp_feature_name>`: The specific name of the mcp feature to use.
+- `<mcp_feature_name>`: The specific name of the MCP feature to use.
+
+All path components  (`<server_name>`,`<mcp_feature>`,`<mcp_feature_name>` )
+are case-insensitive ASCII strings matching the regular expression `[a-z0-9\-]+`.
+Any non-matching character **MUST** be percent-encoded.
 
 This URI scheme has been designed to provide a clear and secure way for MCP clients to resolve and use MCP features.
 The `<domain>` component allows the client to locate an authoritative TXT DNS record that contains a signed JWT for discovery.
@@ -72,6 +86,22 @@ This flexibility supports the use of domain-specific MCP servers tailored to dif
 
 ---
 
+### JWT Format
+
+The JWT to discover the MCP server endpoint SHOULD have these claims:
+
+ - `iss` (required): Domain name that owns the record
+ - `exp` (required): Unix-timestamp, MUST NOT be in the past
+ - `mcpServers` (required): Map <server_name, https_url>
+ - `metaInformation` (optional):  Map <key, value>
+
+ The JWT **MUST** be signed with `alg` =`ES256` or `RS256`.
+ The public key can be obtained either
+ - from a JWK Set at `https://<domain>/.well-known/mcp-jwks.json`, or
+ - embedded as `jku` / `jwk` header parameters, or
+ - singed from an official CA.
+
+
 ### Discovery Workflow
 
 1. **TXT Record Lookup**
@@ -80,6 +110,11 @@ This flexibility supports the use of domain-specific MCP servers tailored to dif
      _mcp.domain.tld. IN TXT "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
      ```
    - The TXT record contains a **JWT** with a signed list of authorized MCP servers.
+   - HTTPS Fallback (Optional)
+      If no valid `_mcp.<domain>` TXT record is found, a client **MAY** issue
+      `GET https://<domain>/.well-known/mcp.json`.
+      The JSON document MUST contain a `jwt` field with the same payload semantics as the DNS-based JWT.
+
 
 2. **JWT Validation**
    - The client verifies the JWT signature using a trusted public key, which is signed by an official CA.
@@ -109,12 +144,15 @@ sequenceDiagram
     MCP_Server-->>Client: Return result
 ```
 
+
 ---
 
 ## Security Considerations
 
-- **Signature Verification**: All TXT records must be signed using a trusted key hierarchy.
-- **DNSSEC/DoH Recommendation**: To prevent DNS spoofing attacks, clients are encouraged to use DNSSEC or DNS-over-HTTPS.
+- **DNS Integrity** – Clients **SHOULD** verify DNSSEC signatures when available.
+ If DNSSEC is not deployed, clients **SHOULD** perform the TXT lookup via DoH/DoT.
+- **Signature Verification**: All JWT MUST be signed using a trusted key hierarchy.
+ The JWT MUST be validated before use.
 - **Allowlist Support**: Clients MAY support domain or issuer allowlists for additional safety.
 
 ---
@@ -148,12 +186,16 @@ _mcp.example.com. IN TXT "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
 
 ---
 
-## Open Questions
+## To Be Determined
 
 - Should DNSSEC be mandatory or optional for this specification?
-- Should clients be allowed to combine multiple servers signed by the same domain?
-- Should a fallback without JWT (e.g., simple TXT record with URL) be permitted, e.g. for usage in private networks?
+ - **Proposal**: "SHOULD"
 
+- Should clients be allowed to combine multiple servers signed by the same domain?
+ - **Proposal**: "SHOULD"
+
+- Should a fallback without JWT (e.g., simple TXT record with URL) be permitted?
+ - **Proposal**: Only in private networks described in RFC 1918
 ---
 
 ## Advantages
